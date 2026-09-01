@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+magik-events.jsonl
+magik-summary.json
+magik-runs/

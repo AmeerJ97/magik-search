@@ -1,0 +1,6 @@
+include CHANGELOG.md
+include CONTRIBUTING.md
+include ROADMAP.md
+include SECURITY.md
+include report.md
+recursive-include scripts *.sh
