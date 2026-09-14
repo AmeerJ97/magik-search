@@ -1,0 +1,4 @@
+{
+  "name": "magik-search",
+  "install": "bash .cursor/install.sh"
+}
