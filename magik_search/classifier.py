@@ -38,13 +38,13 @@ class Classifier:
                         results = self._magika.identify_paths([str(path) for path in content_paths])
                     for path, result in zip(content_paths, results, strict=True):
                         item = result.output
-                        label = str(item.ct_label)
+                        label = str(item.label)
                         mime = str(item.mime_type)
                         classified[path] = {
                             "path": str(path),
                             "label": label,
                             "mime": mime,
-                            "score": float(item.score),
+                            "score": float(result.score),
                             "verified": label in {"xml", "svg"} or "xml" in mime.lower(),
                         }
             except Exception as exc:  # Classifier failure must not terminate traversal.
