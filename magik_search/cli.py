@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import shutil
 import sys
@@ -15,13 +14,33 @@ from typing import Any
 from . import __version__
 from .classifier import Classifier
 from .events import EventStream
+from .output import (
+    print_doctor,
+    print_scan_complete,
+    print_scan_start,
+    print_stats,
+    print_topology,
+    print_warnings,
+    print_welcome,
+)
 from .scanner import Scanner
+from .terminal import wordmark
 from .topology import discover_topology
 from .tui import Dashboard
 
 
 class CliError(Exception):
     """Expected operator error with a stable exit status."""
+
+
+class BrandedArgumentParser(argparse.ArgumentParser):
+    def print_help(self, file=None) -> None:
+        stream = file or sys.stdout
+        logo = wordmark(stream)
+        if logo:
+            print(logo, file=stream)
+            print(file=stream)
+        super().print_help(stream)
 
 
 def _positive_int(value: str) -> int:
@@ -39,10 +58,17 @@ def _temperature(value: str) -> float:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = BrandedArgumentParser(
         prog="magik-search",
         description="Discover files quickly without making physical drives fight each other.",
-        epilog="Run 'magik-search COMMAND --help' for command-specific options.",
+        epilog=(
+            "Quick start:\n"
+            "  magik-search doctor\n"
+            "  magik-search topology\n"
+            "  magik-search scan /data -g '*.xml'\n\n"
+            "Run 'magik-search COMMAND --help' for command-specific options."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -102,8 +128,12 @@ def _parser() -> argparse.ArgumentParser:
     topology = subparsers.add_parser("topology", help="inspect drives, mounts, LVM PVs and LVs")
     topology.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 
-    stats = subparsers.add_parser("stats", help="render statistics from a completed run")
-    stats.add_argument("summary", type=Path, metavar="SUMMARY_JSON")
+    stats = subparsers.add_parser(
+        "stats",
+        help="render statistics from a completed run",
+        description="Render a summary file, run directory, or the newest run under ./magik-runs.",
+    )
+    stats.add_argument("summary", nargs="?", type=Path, metavar="SUMMARY_OR_RUN_DIR")
     stats.add_argument("--json", action="store_true", help="re-emit validated JSON")
 
     subparsers.add_parser("doctor", help="check runtime commands and optional features")
@@ -116,26 +146,6 @@ def _run_paths(args: argparse.Namespace, run_id: str) -> tuple[Path, Path, Path,
     results = (args.results or output_dir / "results.jsonl").expanduser().resolve()
     summary = (args.summary or output_dir / "summary.json").expanduser().resolve()
     return output_dir, event_log, results, summary
-
-
-def _print_topology(data: dict[str, Any]) -> None:
-    print("Physical drives")
-    if not data["drives"]:
-        print("  none discovered")
-    for drive in data["drives"].values():
-        media = "HDD" if drive["rotational"] else "SSD/NVMe"
-        size = f"{drive['size'] / (1024**3):.1f} GiB" if drive["size"] else "unknown"
-        print(f"  {drive['name']:<12} {media:<8} {size:>12}  {drive['model']}")
-    print("\nMount → physical drive")
-    for mount in data["mounts"]:
-        print(f"  {mount['target']:<32} {mount['source']:<28} {','.join(mount['drives']) or '?'}")
-    for title, key in (("LVM physical volumes", "pvs"), ("LVM logical volumes", "lvs")):
-        if data[key]:
-            print(f"\n{title}")
-            for row in data[key]:
-                print("  " + "  ".join(f"{name}={value}" for name, value in row.items()))
-    for warning in data["warnings"]:
-        print(f"warning: {warning}", file=sys.stderr)
 
 
 def _load_summary(path: Path) -> dict[str, Any]:
@@ -152,58 +162,55 @@ def _load_summary(path: Path) -> dict[str, Any]:
     return data
 
 
-def _print_stats(data: dict[str, Any]) -> None:
-    workers = data["workers"]
-    classifiers = data["magika_invocations"]
-    state = "interrupted" if data.get("interrupted") else "complete"
-    print(f"Run {state} in {data['duration']:.2f}s")
-    print(f"  candidates       {data['results']:,}")
-    print(f"  verified matches {data['verified_matches']:,}")
-    print(f"  metadata events  {data.get('events', 0):,}")
-    print(
-        f"  scouts           {workers['spawned']:,}  "
-        f"coverage {workers['coverage']:,}  useful {workers['usefulness']:.2%}"
+def _resolve_summary(path: Path | None) -> tuple[Path, dict[str, Any]]:
+    if path is not None:
+        resolved = path.expanduser()
+        if resolved.is_dir():
+            resolved = resolved / "summary.json"
+        return resolved, _load_summary(resolved)
+
+    candidates = sorted(
+        Path("magik-runs").glob("*/summary.json"),
+        key=lambda candidate: candidate.stat().st_mtime,
+        reverse=True,
     )
-    print(
-        f"  classifier runs  {classifiers['spawned']:,}  "
-        f"coverage {classifiers['coverage']:,}  useful {classifiers['usefulness']:.2%}"
-    )
-    if data["lanes"]:
-        print("\nDrive lanes")
-        for lane in data["lanes"]:
-            print(
-                f"  {lane['drive']['name']:<12} {lane['entries']:>10,} entries  "
-                f"{lane['candidates']:>8,} candidates  {lane['spawned_workers']:>3} scouts  "
-                f"{lane['errors']} errors"
-            )
+    for candidate in candidates:
+        try:
+            return candidate, _load_summary(candidate)
+        except CliError:
+            continue
+    raise CliError("no completed runs found under ./magik-runs; pass a summary file or run directory")
 
 
 def _doctor() -> int:
-    rows = []
+    topology = discover_topology()
+    rows: list[tuple[str, str, str]] = []
     failures = 0
     for command, required in (("lsblk", True), ("findmnt", True), ("pvs", False), ("lvs", False)):
         path = shutil.which(command)
-        okay = path is not None
-        failures += int(required and not okay)
-        rows.append((command, "ok" if okay else "missing", path or ("required" if required else "optional")))
-    magika = importlib.util.find_spec("magika") is not None
-    rows.append(
-        (
-            "magika",
-            "ok" if magika else "missing",
-            "classifier enabled" if magika else "optional; metadata mode available",
+        warning = next((item for item in topology.warnings if item.startswith(f"{command} ")), None)
+        if path is None or warning:
+            state = "error" if required else "warning"
+            detail = warning or f"not found; {'required' if required else 'optional'}"
+            failures += int(required)
+        else:
+            state = "ok"
+            detail = path
+        rows.append((command, state, detail))
+
+    classifier = Classifier()
+    if classifier.backend == "magika":
+        rows.append(("magika", "ok", "content verification enabled"))
+    else:
+        rows.append(
+            (
+                "magika",
+                "warning",
+                f"{classifier.unavailable_reason}; reinstall with ./scripts/install.sh",
+            )
         )
-    )
-    print(f"magik-search {__version__}")
-    print(f"Python {sys.version.split()[0]} on {sys.platform}")
-    for name, status, detail in rows:
-        marker = "✓" if status == "ok" else ("✗" if detail == "required" else "○")
-        print(f"  {marker} {name:<9} {status:<7} {detail}")
-    if failures:
-        print("\nDoctor found missing required commands.", file=sys.stderr)
-        return 1
-    print("\nReady to scan.")
-    return 0
+    print_doctor(__version__, sys.version.split()[0], sys.platform, rows, failures)
+    return 1 if failures else 0
 
 
 def _scan(args: argparse.Namespace) -> int:
@@ -223,13 +230,17 @@ def _scan(args: argparse.Namespace) -> int:
     except OSError as exc:
         raise CliError(f"cannot create run artifacts: {exc}") from exc
     topology = discover_topology()
+    patterns = args.name_glob or ["*fsm*.xml"]
+    classifier = Classifier(enabled=not args.no_magika)
+    print_scan_start(roots, patterns, classifier.backend, classifier.unavailable_reason)
+    print_warnings(topology.warnings)
     try:
         scanner = Scanner(
             topology,
             roots,
-            args.name_glob or ["*fsm*.xml"],
+            patterns,
             events,
-            Classifier(enabled=not args.no_magika),
+            classifier,
             ssd_workers=args.ssd_workers,
             hdd_workers=args.hdd_workers,
             batch_size=args.batch_size,
@@ -269,15 +280,14 @@ def _scan(args: argparse.Namespace) -> int:
     except OSError as exc:
         raise CliError(f"cannot write run results: {exc}") from exc
 
-    print(
-        f"Scan {'interrupted' if scanner.interrupted else 'complete'}: "
-        f"{outcome['results']:,} candidates, {outcome['verified_matches']:,} verified"
+    print_scan_complete(
+        outcome,
+        scanner.interrupted,
+        event_log,
+        results_path,
+        summary_path,
+        len(scanner.expanded_mount_roots),
     )
-    print(f"  events   {event_log}")
-    print(f"  results  {results_path}")
-    print(f"  summary  {summary_path}")
-    if scanner.expanded_mount_roots:
-        print(f"  mounts   {len(scanner.expanded_mount_roots)} nested filesystems scanned in drive-aware lanes")
     return 130 if scanner.interrupted else 0
 
 
@@ -285,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        parser.print_help()
+        print_welcome(parser.format_help())
         return 0
     try:
         if args.command == "scan":
@@ -295,14 +305,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.json:
                 print(json.dumps(data, indent=2))
             else:
-                _print_topology(data)
+                print_topology(data)
             return 0
         if args.command == "stats":
-            data = _load_summary(args.summary)
+            summary_path, data = _resolve_summary(args.summary)
             if args.json:
                 print(json.dumps(data, indent=2))
             else:
-                _print_stats(data)
+                print_stats(data, summary_path)
             return 0
         if args.command == "doctor":
             return _doctor()

@@ -15,15 +15,19 @@ class Classifier:
     def __init__(self, enabled: bool = True) -> None:
         self._lock = threading.Lock()
         self._magika: Any = None
+        self.requested = enabled
         self.backend = "metadata"
+        self.unavailable_reason: str | None = None
         if enabled:
             try:
                 from magika import Magika
 
                 self._magika = Magika()
                 self.backend = "magika"
-            except Exception:
-                pass
+            except ModuleNotFoundError:
+                self.unavailable_reason = "Magika is not installed"
+            except Exception as exc:
+                self.unavailable_reason = f"Magika could not initialize: {type(exc).__name__}: {exc}"
 
     def classify(self, paths: list[Path]) -> tuple[list[dict[str, Any]], ClassifierStats]:
         started = time.time()

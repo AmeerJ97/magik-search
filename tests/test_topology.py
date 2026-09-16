@@ -1,6 +1,7 @@
+import subprocess
 from pathlib import Path
 
-from magik_search.topology import topology_from_reports
+from magik_search.topology import _command_json, topology_from_reports
 
 
 def test_lvm_mount_maps_to_physical_disk() -> None:
@@ -46,3 +47,18 @@ def test_multi_pv_mount_aggregates_drives() -> None:
     }
     topology = topology_from_reports(report)
     assert topology.drives_for(Path("/data/archive")) == ("sda", "sdb")
+
+
+def test_command_failure_reports_concise_permission_warning(monkeypatch) -> None:
+    def denied(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            5,
+            args[0],
+            stderr="WARNING: Running as a non-root user.\n/run/lock/lvm: Permission denied\n",
+        )
+
+    monkeypatch.setattr("magik_search.topology.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr("magik_search.topology.subprocess.run", denied)
+    warnings: list[str] = []
+    assert _command_json(["pvs", "--reportformat", "json"], warnings) == {}
+    assert warnings == ["pvs probe failed (permission denied for current user); related topology data omitted"]

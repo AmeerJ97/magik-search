@@ -21,8 +21,29 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: ruff check .
       - run: ruff format --check .
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh .cursor/install.sh
       - run: pytest -q
       - run: python -m build
       - run: magik-search --version
       - run: magik-search doctor
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test isolated installer and uninstaller
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/data
+          XDG_BIN_HOME: ${{ runner.temp }}/bin
+        run: |
+          ./scripts/install.sh --without-magika
+          "$XDG_BIN_HOME/magik-search" --version
+          ./scripts/uninstall.sh
+          test ! -e "$XDG_BIN_HOME/magik-search"
+      - name: Test Magika integration
+        run: |
+          python -m pip install '.[magika]'
+          python -c "from magik_search.classifier import Classifier; assert Classifier().backend == 'magika'"

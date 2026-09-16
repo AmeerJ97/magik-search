@@ -17,9 +17,28 @@ def _command_json(command: list[str], warnings: list[str]) -> dict[str, Any]:
     try:
         result = subprocess.run([executable, *command[1:]], capture_output=True, text=True, check=True, timeout=10)
         return json.loads(result.stdout)
-    except (subprocess.SubprocessError, json.JSONDecodeError) as exc:
-        warnings.append(f"{' '.join(command)} failed: {exc}")
+    except subprocess.CalledProcessError as exc:
+        detail = _command_failure_detail(exc.stderr)
+        warnings.append(f"{command[0]} probe failed ({detail}); related topology data omitted")
         return {}
+    except subprocess.TimeoutExpired:
+        warnings.append(f"{command[0]} probe timed out; related topology data omitted")
+        return {}
+    except json.JSONDecodeError:
+        warnings.append(f"{command[0]} returned invalid JSON; related topology data omitted")
+        return {}
+
+
+def _command_failure_detail(stderr: str | bytes | None) -> str:
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    text = stderr or ""
+    if "Permission denied" in text or "Running as a non-root user" in text:
+        return "permission denied for current user"
+    lines = [
+        line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("File descriptor ")
+    ]
+    return lines[-1] if lines else "command exited unsuccessfully"
 
 
 def _integer(value: Any) -> int:

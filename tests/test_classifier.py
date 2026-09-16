@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from magik_search.classifier import Classifier
@@ -29,3 +30,18 @@ def test_magika_treats_symlink_candidates_as_metadata_only(tmp_path: Path) -> No
         }
     ]
     assert stats.error is None
+
+
+def test_missing_magika_exposes_fallback_reason(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "magika", None)
+    classifier = Classifier()
+    assert classifier.requested is True
+    assert classifier.backend == "metadata"
+    assert classifier.unavailable_reason == "Magika is not installed"
+
+
+def test_explicit_metadata_mode_has_no_failure_reason() -> None:
+    classifier = Classifier(enabled=False)
+    assert classifier.requested is False
+    assert classifier.backend == "metadata"
+    assert classifier.unavailable_reason is None

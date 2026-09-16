@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "magik-search"
-version = "0.3.2"
+version = "0.4.0"
 description = "Drive-aware filesystem discovery with adaptive workers and live telemetry"
 readme = "README.md"
 license = "MIT"

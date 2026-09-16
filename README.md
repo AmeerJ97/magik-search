@@ -20,7 +20,7 @@ metadata-only results and continue to be traversed.
 - Spawns traversal scouts dynamically as useful work becomes available.
 - Responds to per-drive I/O pressure and global CPU temperature.
 - Logs metadata for every observed entry without logging file content.
-- Optionally verifies candidate types in batches with Google Magika.
+- Verifies candidate types in batches with Google Magika by default.
 - Draws a live colored tree above approximate progress bars for every drive.
 - Records scout and classifier spawn count, lifetime, coverage, usefulness, and
   errors for later analysis.
@@ -43,7 +43,7 @@ storage topology, requested patterns, and logging volume.
 - Python 3.10 or newer
 - `lsblk` and `findmnt` from util-linux
 - Optional: LVM2's `pvs` and `lvs` for richer LVM reports
-- Optional: Magika for content-type verification
+- Magika for content-type verification (installed by the bundled installer)
 
 Missing optional tools are reported but do not prevent scanning.
 
@@ -57,15 +57,20 @@ cd magik-search
 magik-search doctor
 ```
 
-Include Magika classification:
+The installer creates an isolated virtual environment, installs Magika content
+verification, links the command, and runs a system check. For a lightweight
+metadata-only installation:
 
 ```bash
-./scripts/install.sh --with-magika
+./scripts/install.sh --without-magika
 ```
 
 The installer creates an isolated virtual environment under
 `$XDG_DATA_HOME/magik-search` (normally `~/.local/share/magik-search`) and links
 the CLI into `$XDG_BIN_HOME` (normally `~/.local/bin`). It does not use `sudo`.
+Re-running it upgrades the existing isolated installation. Use `--force` only
+when replacing an unrelated command at the link path, or set `PYTHON` to choose
+a Python 3.10+ interpreter.
 
 Other standard installation methods work too:
 
@@ -122,8 +127,12 @@ summary.json  aggregate and per-lifecycle statistics
 View a completed run:
 
 ```bash
+magik-search stats
 magik-search stats magik-runs/20260812-120000-ab12cd34/summary.json
 ```
+
+With no argument, `stats` opens the newest valid run under `./magik-runs`. A
+summary file or its containing run directory can also be passed explicitly.
 
 ## Important scan options
 
@@ -141,6 +150,12 @@ magik-search stats magik-runs/20260812-120000-ab12cd34/summary.json
 | `--temp-limit °C` | Pause new directory work at this temperature |
 
 Run `magik-search scan --help` for the complete and current interface.
+
+The CLI reports its active classifier before a scan. If Magika is unavailable
+or cannot initialize, it explains that the run will fall back to metadata-only
+results and provides a reinstall command. `doctor` performs real topology
+probes, so optional LVM permission limitations may appear as warnings even when
+the `pvs` and `lvs` commands are installed.
 
 ## Progress and statistics
 
